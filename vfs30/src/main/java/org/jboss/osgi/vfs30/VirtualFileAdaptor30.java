@@ -120,7 +120,40 @@ class VirtualFileAdaptor30 implements VirtualFile {
         this(VFS.getChild(name));
         if (input == null)
             throw MESSAGES.illegalArgumentNull("input");
-        mount = VFS.mountZip(input, vfsFile.getName(), vfsFile, tmpProvider);
+        mount = mountZip(input, vfsFile.getName(), vfsFile);
+    }
+
+    /**
+     * Mount the archive with the {@link LenientZipFileSystem}: unlike the zip file system of jboss-vfs it keeps the
+     * entries below a path that is also a file entry, as java.util.zip does
+     */
+    private static Closeable mountZip(InputStream zipData, String zipName, org.jboss.vfs.VirtualFile mountPoint) throws IOException {
+        boolean ok = false;
+        try {
+            final TempDir tempDir = tmpProvider.createTempDir(zipName);
+            try {
+                final LenientZipFileSystem fileSystem = new LenientZipFileSystem(zipName, zipData, tempDir);
+                try {
+                    final Closeable mountHandle = VFS.mount(mountPoint, fileSystem);
+                    ok = true;
+                    return new Closeable() {
+                        @Override
+                        public void close() throws IOException {
+                            VFSUtils.safeClose(mountHandle);
+                            VFSUtils.safeClose(fileSystem);
+                        }
+                    };
+                } finally {
+                    if (!ok)
+                        VFSUtils.safeClose(fileSystem);
+                }
+            } finally {
+                if (!ok)
+                    VFSUtils.safeClose(tempDir);
+            }
+        } finally {
+            VFSUtils.safeClose(zipData);
+        }
     }
 
     VirtualFileAdaptor30(org.jboss.vfs.VirtualFile vfsFile) {
@@ -317,7 +350,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
     private void ensureMounted() throws IOException {
         synchronized (this) {
             if (mount == null && acceptForMount()) {
-                mount = VFS.mountZip(vfsFile, vfsFile, tmpProvider);
+                mount = mountZip(vfsFile.openStream(), vfsFile.getName(), vfsFile);
             }
         }
     }
