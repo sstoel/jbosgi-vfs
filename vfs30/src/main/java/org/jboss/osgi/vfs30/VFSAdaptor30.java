@@ -51,6 +51,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jboss.osgi.vfs.VFSAdaptor;
 import org.jboss.osgi.vfs.VirtualFile;
@@ -66,6 +67,8 @@ import org.jboss.vfs.VFSUtils;
 public final class VFSAdaptor30 implements VFSAdaptor {
 
     private static Map<org.jboss.vfs.VirtualFile, VirtualFile> registry = new WeakHashMap<org.jboss.vfs.VirtualFile, VirtualFile>();
+    // Makes the mount point of a stream unique, also for streams that are mounted within the same millisecond
+    private static final AtomicLong streamCount = new AtomicLong();
 
     @Override
     public VirtualFile toVirtualFile(URL url) throws IOException {
@@ -89,7 +92,7 @@ public final class VFSAdaptor30 implements VFSAdaptor {
 
     @Override
     public VirtualFile toVirtualFile(InputStream inputStream) throws IOException {
-        String name = "stream" + System.currentTimeMillis();
+        String name = "stream" + System.currentTimeMillis() + "-" + streamCount.incrementAndGet();
         return new VirtualFileAdaptor30(name, inputStream);
     }
 
