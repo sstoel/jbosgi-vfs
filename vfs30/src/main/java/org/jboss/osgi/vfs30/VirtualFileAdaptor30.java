@@ -46,8 +46,6 @@ import static org.jboss.osgi.vfs.VFSLogger.LOGGER;
 import static org.jboss.osgi.vfs.VFSMessages.MESSAGES;
 
 import java.io.Closeable;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -59,15 +57,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.jar.JarOutputStream;
-import java.util.zip.ZipEntry;
 
 import org.jboss.osgi.vfs.VirtualFile;
 import org.jboss.vfs.TempDir;
 import org.jboss.vfs.TempFileProvider;
 import org.jboss.vfs.VFS;
 import org.jboss.vfs.VFSUtils;
-import org.jboss.vfs.VirtualJarInputStream;
 
 /**
  * An adaptor to the jboss-vfs-3.0.x VirtualFile.
@@ -80,8 +75,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
     private final org.jboss.vfs.VirtualFile vfsFile;
     private IOException leakDebuggingStack;
     private Closeable mount;
-    private TempDir streamDir;
-    private File streamFile;
+    private boolean closed;
 
     private static boolean LEAK_DEBUGGING;
     static {
@@ -202,24 +196,8 @@ class VirtualFileAdaptor30 implements VirtualFile {
         if (vfsFile.isFile() == true)
             return vfsFile.toURL();
 
-        synchronized (this) {
-            if (streamFile == null) {
-                streamDir = tmpProvider.createTempDir("urlstream");
-                streamFile = streamDir.getFile(getName());
-
-                JarOutputStream jarOut = new JarOutputStream(new FileOutputStream(streamFile));
-                VirtualJarInputStream jarIn = (VirtualJarInputStream) vfsFile.openStream();
-                ZipEntry nextEntry = jarIn.getNextEntry();
-                while (nextEntry != null) {
-                    jarOut.putNextEntry(nextEntry);
-                    VFSUtils.copyStream(jarIn, jarOut);
-                    nextEntry = jarIn.getNextEntry();
-                }
-                jarOut.close();
-                jarIn.close();
-            }
-        }
-        return streamFile.toURI().toURL();
+        // A directory (or a mounted archive) is streamed as a jar
+        return VirtualJarStreamHandler.toStreamURL(vfsFile);
     }
 
     @Override
@@ -264,7 +242,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
             path = path.substring(1);
 
         org.jboss.vfs.VirtualFile child = getMountedChild(path);
-        if (child.exists() == false)
+        if (isSelfOrDescendant(child) == false || child.exists() == false)
             return null;
 
         return new VFSFindEntriesEnumeration(vfsFile, child, pattern, recurse);
@@ -286,7 +264,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
             child = vfsFile;
         }
 
-        if (child.exists() == false)
+        if (isSelfOrDescendant(child) == false || child.exists() == false)
             return null;
 
         return new VFSEntryPathsEnumeration(vfsFile, child);
@@ -316,14 +294,14 @@ class VirtualFileAdaptor30 implements VirtualFile {
             VFSUtils.safeClose(mount);
             leakDebuggingStack = null;
             mount = null;
+            closed = true;
             VFSAdaptor30.unregister(this);
-            if (streamFile != null) {
-                File streamParent = streamFile.getParentFile();
-                streamFile.delete();
-                streamParent.delete();
-                streamFile = null;
-            }
         }
+    }
+
+    // A path with ".." segments can lead to a file above this one
+    private boolean isSelfOrDescendant(org.jboss.vfs.VirtualFile file) {
+        return file.getParentFileList().contains(vfsFile);
     }
 
     private boolean acceptForMount() {
@@ -350,14 +328,23 @@ class VirtualFileAdaptor30 implements VirtualFile {
     private void ensureMounted() throws IOException {
         synchronized (this) {
             if (mount == null && acceptForMount()) {
+                // A closed file must not mount its archive again, nobody would close that mount
+                if (closed)
+                    throw MESSAGES.illegalStateVirtualFileClosed(vfsFile);
                 mount = mountZip(vfsFile.openStream(), vfsFile.getName(), vfsFile);
+                VFSAdaptor30.mounted(this);
             }
         }
     }
 
     @Override
     public boolean equals(Object obj) {
-        return vfsFile.equals(obj);
+        if (obj == this)
+            return true;
+        if (!(obj instanceof VirtualFileAdaptor30))
+            return false;
+        VirtualFileAdaptor30 other = (VirtualFileAdaptor30) obj;
+        return vfsFile.equals(other.vfsFile);
     }
 
     @Override

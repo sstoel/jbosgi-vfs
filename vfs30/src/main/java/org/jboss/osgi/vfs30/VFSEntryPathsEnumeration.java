@@ -46,6 +46,7 @@ import static org.jboss.osgi.vfs.VFSMessages.MESSAGES;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.List;
@@ -77,6 +78,12 @@ class VFSEntryPathsEnumeration implements Enumeration<String> {
             throw MESSAGES.illegalArgumentNull("root");
         if (file == null)
             throw MESSAGES.illegalArgumentNull("file");
+
+        // A path with ".." segments can lead above the root, there are no entry paths
+        if (file.getParentFileList().contains(root) == false) {
+            this.paths = Collections.<String> emptyList().iterator();
+            return;
+        }
 
         String rootPath = root.getPathName();
         ArrayList<String> paths = new ArrayList<String>();

@@ -46,10 +46,14 @@ import static org.jboss.osgi.vfs.VFSMessages.MESSAGES;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -66,7 +70,10 @@ import org.jboss.vfs.VFSUtils;
  */
 public final class VFSAdaptor30 implements VFSAdaptor {
 
-    private static Map<org.jboss.vfs.VirtualFile, VirtualFile> registry = new WeakHashMap<org.jboss.vfs.VirtualFile, VirtualFile>();
+    // The adaptors of the jboss-vfs files. The value must not reference its key strongly, otherwise the entry is never
+    // expunged: an adaptor that nobody uses any more can be collected, unless it owns a mount that was not closed yet
+    private static final Map<org.jboss.vfs.VirtualFile, WeakReference<VirtualFileAdaptor30>> registry = new WeakHashMap<org.jboss.vfs.VirtualFile, WeakReference<VirtualFileAdaptor30>>();
+    private static final Set<VirtualFileAdaptor30> mountOwners = Collections.newSetFromMap(new IdentityHashMap<VirtualFileAdaptor30, Boolean>());
     // Makes the mount point of a stream unique, also for streams that are mounted within the same millisecond
     private static final AtomicLong streamCount = new AtomicLong();
 
@@ -104,14 +111,15 @@ public final class VFSAdaptor30 implements VFSAdaptor {
         if (other instanceof org.jboss.vfs.VirtualFile == false)
             throw MESSAGES.illegalArgumentNoVirtualFile(other);
 
-        VirtualFile absFile;
+        VirtualFileAdaptor30 absFile;
         synchronized (registry) {
             org.jboss.vfs.VirtualFile vfsFile = (org.jboss.vfs.VirtualFile) other;
-            absFile = registry.get(other);
+            absFile = getRegistered(vfsFile);
             if (absFile == null) {
-                // Register the VirtualFile abstraction
+                // Register the VirtualFile abstraction, the entry of a collected adaptor must not keep its old key
                 absFile = new VirtualFileAdaptor30(vfsFile);
-                registry.put(vfsFile, absFile);
+                registry.remove(vfsFile);
+                registry.put(vfsFile, new WeakReference<VirtualFileAdaptor30>(absFile));
             }
         }
         return absFile;
@@ -126,9 +134,25 @@ public final class VFSAdaptor30 implements VFSAdaptor {
         return adaptor.getVirtualFile();
     }
 
+    // A registered adaptor that mounted its archive stays registered until it is closed
+    static void mounted(VirtualFileAdaptor30 absFile) {
+        synchronized (registry) {
+            if (getRegistered(absFile.getVirtualFile()) == absFile)
+                mountOwners.add(absFile);
+        }
+    }
+
     static void unregister(VirtualFileAdaptor30 absFile) {
         synchronized (registry) {
-            registry.remove(absFile.getVirtualFile());
+            mountOwners.remove(absFile);
+            VirtualFileAdaptor30 registered = getRegistered(absFile.getVirtualFile());
+            if (registered == null || registered == absFile)
+                registry.remove(absFile.getVirtualFile());
         }
+    }
+
+    private static VirtualFileAdaptor30 getRegistered(org.jboss.vfs.VirtualFile vfsFile) {
+        WeakReference<VirtualFileAdaptor30> ref = registry.get(vfsFile);
+        return ref != null ? ref.get() : null;
     }
 }

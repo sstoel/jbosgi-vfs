@@ -47,6 +47,7 @@ import static org.jboss.osgi.vfs.VFSMessages.MESSAGES;
 import java.io.IOException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.regex.Matcher;
@@ -84,6 +85,12 @@ class VFSFindEntriesEnumeration implements Enumeration<URL> {
             throw MESSAGES.illegalArgumentNull("root");
         if (file == null)
             throw MESSAGES.illegalArgumentNull("file");
+
+        // A path with ".." segments can lead above the root, there are no entries
+        if (file.getParentFileList().contains(root) == false) {
+            this.paths = Collections.<URL> emptyList().iterator();
+            return;
+        }
 
         String rootPath = root.getPathName();
         VisitorAttributes attributes = new VisitorAttributes();
@@ -137,10 +144,31 @@ class VFSFindEntriesEnumeration implements Enumeration<URL> {
             }
         }
 
-        // Convert file pattern (RFC 1960-based Filter) into a RegEx pattern
-        private static Pattern convertToPattern(String filePattern) {
-            filePattern = filePattern.replace("*", ".*");
-            return Pattern.compile("^" + filePattern + "$");
+        // Convert file pattern (RFC 1960-based Filter) into a RegEx pattern: only '*' is a wildcard, a backslash escapes
+        // the next character, every other character matches literally
+        static Pattern convertToPattern(String filePattern) {
+            StringBuilder regex = new StringBuilder("^");
+            StringBuilder literal = new StringBuilder();
+            for (int i = 0; i < filePattern.length(); i++) {
+                char c = filePattern.charAt(i);
+                if (c == '\\' && i + 1 < filePattern.length()) {
+                    literal.append(filePattern.charAt(++i));
+                } else if (c == '*') {
+                    appendLiteral(regex, literal);
+                    regex.append(".*");
+                } else {
+                    literal.append(c);
+                }
+            }
+            appendLiteral(regex, literal);
+            return Pattern.compile(regex.append('$').toString(), Pattern.DOTALL);
+        }
+
+        private static void appendLiteral(StringBuilder regex, StringBuilder literal) {
+            if (literal.length() > 0) {
+                regex.append(Pattern.quote(literal.toString()));
+                literal.setLength(0);
+            }
         }
 
     }

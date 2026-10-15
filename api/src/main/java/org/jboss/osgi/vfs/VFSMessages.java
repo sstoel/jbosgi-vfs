@@ -80,4 +80,7 @@ public interface VFSMessages {
 
     @Message(id = 10106, value = "Cannot close VFS temp file provider")
     IllegalStateException illegalStateCannotCloseTempFileProvider(@Cause Throwable cause);
+
+    @Message(id = 10107, value = "VirtualFile closed: %s")
+    IllegalStateException illegalStateVirtualFileClosed(Object file);
 }
