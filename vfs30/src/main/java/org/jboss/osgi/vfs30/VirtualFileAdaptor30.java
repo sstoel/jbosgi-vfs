@@ -75,7 +75,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
     private final org.jboss.vfs.VirtualFile vfsFile;
     private IOException leakDebuggingStack;
     private Closeable mount;
-    private boolean closed;
+    private volatile boolean closed;
 
     private static boolean LEAK_DEBUGGING;
     static {
@@ -178,10 +178,12 @@ class VirtualFileAdaptor30 implements VirtualFile {
     }
 
     public boolean isFile() throws IOException {
+        assertNotClosed();
         return vfsFile.isFile();
     }
 
     public boolean isDirectory() throws IOException {
+        assertNotClosed();
         return vfsFile.isDirectory();
     }
 
@@ -193,6 +195,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
 
     @Override
     public URL getStreamURL() throws IOException {
+        assertNotClosed();
         if (vfsFile.isFile() == true)
             return vfsFile.toURL();
 
@@ -260,6 +263,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
         if (path.length() > 0) {
             child = getMountedChild(path);
         } else {
+            assertNotClosed();
             ensureMounted();
             child = vfsFile;
         }
@@ -272,6 +276,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
 
     @Override
     public InputStream openStream() throws IOException {
+        assertNotClosed();
         if (mount != null)
             return getStreamURL().openStream();
 
@@ -299,6 +304,13 @@ class VirtualFileAdaptor30 implements VirtualFile {
         }
     }
 
+    // The content of a closed file is not accessed any more, archive or directory (subrepos/03). Its name and URL stay
+    // available
+    private void assertNotClosed() {
+        if (closed)
+            throw MESSAGES.illegalStateVirtualFileClosed(vfsFile);
+    }
+
     // A path with ".." segments can lead to a file above this one
     private boolean isSelfOrDescendant(org.jboss.vfs.VirtualFile file) {
         return file.getParentFileList().contains(vfsFile);
@@ -311,16 +323,19 @@ class VirtualFileAdaptor30 implements VirtualFile {
     }
 
     private org.jboss.vfs.VirtualFile getMountedChild(String path) throws IOException {
+        assertNotClosed();
         ensureMounted();
         return vfsFile.getChild(path);
     }
 
     private List<org.jboss.vfs.VirtualFile> getMountedChildren() throws IOException {
+        assertNotClosed();
         ensureMounted();
         return vfsFile.getChildren();
     }
 
     private List<org.jboss.vfs.VirtualFile> getMountedChildrenRecursively() throws IOException {
+        assertNotClosed();
         ensureMounted();
         return vfsFile.getChildrenRecursively();
     }

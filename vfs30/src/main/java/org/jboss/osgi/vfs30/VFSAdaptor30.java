@@ -111,9 +111,15 @@ public final class VFSAdaptor30 implements VFSAdaptor {
         if (other instanceof org.jboss.vfs.VirtualFile == false)
             throw MESSAGES.illegalArgumentNoVirtualFile(other);
 
+        org.jboss.vfs.VirtualFile vfsFile = (org.jboss.vfs.VirtualFile) other;
+        // A directory, also an archive that another party mounted, e.g. the root of a deployment of the server, is not
+        // mounted by the adaptor: every caller gets an adaptor of its own, the close of one does not close the
+        // adaptors of the others (subrepos/03). An archive file is mounted once, by its registered adaptor
+        if (vfsFile.isDirectory())
+            return new VirtualFileAdaptor30(vfsFile);
+
         VirtualFileAdaptor30 absFile;
         synchronized (registry) {
-            org.jboss.vfs.VirtualFile vfsFile = (org.jboss.vfs.VirtualFile) other;
             absFile = getRegistered(vfsFile);
             if (absFile == null) {
                 // Register the VirtualFile abstraction, the entry of a collected adaptor must not keep its old key

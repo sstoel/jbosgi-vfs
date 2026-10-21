@@ -70,16 +70,14 @@ public interface VirtualFile extends Closeable {
     /**
      * Get the simple VF name (X.java)
      * 
-     * @return the simple file name
-     * @throws IllegalStateException if the file is closed
+     * @return the simple file name, also of a closed file
      */
     String getName();
 
     /**
      * Get the VFS relative path name (org/jboss/X.java)
      * 
-     * @return the VFS relative path name
-     * @throws IllegalStateException if the file is closed
+     * @return the VFS relative path name, also of a closed file
      */
     String getPathName();
 
@@ -114,15 +112,15 @@ public interface VirtualFile extends Closeable {
      * Get the URL used for streaming.
      * 
      * @return The stream URL or null if this is not the mounted root file.
+     * @throws IllegalStateException if the file is closed
      */
     URL getStreamURL() throws IOException;
 
     /**
      * Get the parent
      * 
-     * @return the parent or null if there is no parent
+     * @return the parent or null if there is no parent, also of a closed file
      * @throws IOException for any problem accessing the virtual file system
-     * @throws IllegalStateException if the file is closed
      */
     VirtualFile getParent() throws IOException;
 
