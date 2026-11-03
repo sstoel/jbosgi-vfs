@@ -75,6 +75,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
     private final org.jboss.vfs.VirtualFile vfsFile;
     private IOException leakDebuggingStack;
     private Closeable mount;
+    private final boolean mountedArchive;
     private volatile boolean closed;
 
     private static boolean LEAK_DEBUGGING;
@@ -114,7 +115,7 @@ class VirtualFileAdaptor30 implements VirtualFile {
         this(VFS.getChild(name));
         if (input == null)
             throw MESSAGES.illegalArgumentNull("input");
-        mount = mountZip(input, vfsFile.getName(), vfsFile);
+        mount = VFSAdaptor30.shareMount(vfsFile, mountZip(input, vfsFile.getName(), vfsFile));
     }
 
     /**
@@ -151,9 +152,18 @@ class VirtualFileAdaptor30 implements VirtualFile {
     }
 
     VirtualFileAdaptor30(org.jboss.vfs.VirtualFile vfsFile) {
+        this(vfsFile, false);
+    }
+
+    /**
+     * @param mountedArchive true for an archive that another adaptor mounted: this one uses that mount when it reads
+     *        the content, or mounts the archive again if the other one is closed by then (F16)
+     */
+    VirtualFileAdaptor30(org.jboss.vfs.VirtualFile vfsFile, boolean mountedArchive) {
         if (vfsFile == null)
             throw MESSAGES.illegalArgumentNull("file");
         this.vfsFile = vfsFile;
+        this.mountedArchive = mountedArchive;
         if (LEAK_DEBUGGING == true)
             leakDebuggingStack = new IOException("VirtualFile created in this stack frame not closed: " + vfsFile);
     }
@@ -342,11 +352,15 @@ class VirtualFileAdaptor30 implements VirtualFile {
 
     private void ensureMounted() throws IOException {
         synchronized (this) {
+            // The archive of another adaptor is used through its mount, which stays until both adaptors are closed
+            if (mount == null && mountedArchive && !closed)
+                mount = VFSAdaptor30.acquireMount(vfsFile);
             if (mount == null && acceptForMount()) {
                 // A closed file must not mount its archive again, nobody would close that mount
                 if (closed)
                     throw MESSAGES.illegalStateVirtualFileClosed(vfsFile);
-                mount = mountZip(vfsFile.openStream(), vfsFile.getName(), vfsFile);
+                // The mount is shared with the adaptors of this archive that are created while it is mounted (F16)
+                mount = VFSAdaptor30.shareMount(vfsFile, mountZip(vfsFile.openStream(), vfsFile.getName(), vfsFile));
                 VFSAdaptor30.mounted(this);
             }
         }

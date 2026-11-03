@@ -44,6 +44,7 @@ package org.jboss.osgi.vfs30;
 
 import static org.jboss.osgi.vfs.VFSMessages.MESSAGES;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
@@ -51,6 +52,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -74,6 +76,8 @@ public final class VFSAdaptor30 implements VFSAdaptor {
     // expunged: an adaptor that nobody uses any more can be collected, unless it owns a mount that was not closed yet
     private static final Map<org.jboss.vfs.VirtualFile, WeakReference<VirtualFileAdaptor30>> registry = new WeakHashMap<org.jboss.vfs.VirtualFile, WeakReference<VirtualFileAdaptor30>>();
     private static final Set<VirtualFileAdaptor30> mountOwners = Collections.newSetFromMap(new IdentityHashMap<VirtualFileAdaptor30, Boolean>());
+    // The archives that adaptors mounted, with the number of adaptors that use the mount (F16)
+    private static final Map<org.jboss.vfs.VirtualFile, SharedMount> sharedMounts = new HashMap<org.jboss.vfs.VirtualFile, SharedMount>();
     // Makes the mount point of a stream unique, also for streams that are mounted within the same millisecond
     private static final AtomicLong streamCount = new AtomicLong();
 
@@ -114,9 +118,16 @@ public final class VFSAdaptor30 implements VFSAdaptor {
         org.jboss.vfs.VirtualFile vfsFile = (org.jboss.vfs.VirtualFile) other;
         // A directory, also an archive that another party mounted, e.g. the root of a deployment of the server, is not
         // mounted by the adaptor: every caller gets an adaptor of its own, the close of one does not close the
-        // adaptors of the others (subrepos/03). An archive file is mounted once, by its registered adaptor
-        if (vfsFile.isDirectory())
-            return new VirtualFileAdaptor30(vfsFile);
+        // adaptors of the others (subrepos/03). An archive file is mounted once, by its registered adaptor. An adaptor
+        // of an archive that an adaptor mounted uses that mount when it reads the content: it stays mounted until both
+        // are closed (F16)
+        if (vfsFile.isDirectory()) {
+            boolean mountedArchive;
+            synchronized (registry) {
+                mountedArchive = sharedMounts.containsKey(vfsFile);
+            }
+            return new VirtualFileAdaptor30(vfsFile, mountedArchive);
+        }
 
         VirtualFileAdaptor30 absFile;
         synchronized (registry) {
@@ -154,6 +165,63 @@ public final class VFSAdaptor30 implements VFSAdaptor {
             VirtualFileAdaptor30 registered = getRegistered(absFile.getVirtualFile());
             if (registered == null || registered == absFile)
                 registry.remove(absFile.getVirtualFile());
+        }
+    }
+
+    /**
+     * A use of the mount of the archive at the given file that an adaptor made, or null if no adaptor mounted it. The
+     * archive is unmounted when the last use is closed.
+     */
+    static Closeable acquireMount(org.jboss.vfs.VirtualFile vfsFile) {
+        synchronized (registry) {
+            SharedMount mount = sharedMounts.get(vfsFile);
+            return mount != null ? mount.use() : null;
+        }
+    }
+
+    /**
+     * Share a mount that an adaptor made of the archive at the given file, the returned use of it is the first
+     */
+    static Closeable shareMount(org.jboss.vfs.VirtualFile vfsFile, Closeable handle) {
+        synchronized (registry) {
+            SharedMount mount = new SharedMount(vfsFile, handle);
+            sharedMounts.put(vfsFile, mount);
+            return mount.use();
+        }
+    }
+
+    // A mount of an archive with the number of its uses
+    private static final class SharedMount {
+        private final org.jboss.vfs.VirtualFile vfsFile;
+        private final Closeable handle;
+        private int uses;
+
+        SharedMount(org.jboss.vfs.VirtualFile vfsFile, Closeable handle) {
+            this.vfsFile = vfsFile;
+            this.handle = handle;
+        }
+
+        // Called with the registry lock held
+        Closeable use() {
+            uses++;
+            return new Closeable() {
+                private boolean released;
+
+                @Override
+                public void close() throws IOException {
+                    boolean unmount;
+                    synchronized (registry) {
+                        if (released)
+                            return;
+                        released = true;
+                        unmount = --uses == 0;
+                        if (unmount && sharedMounts.get(vfsFile) == SharedMount.this)
+                            sharedMounts.remove(vfsFile);
+                    }
+                    if (unmount)
+                        handle.close();
+                }
+            };
         }
     }
 
